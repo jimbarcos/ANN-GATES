@@ -113,10 +113,12 @@ class NeuralNetwork:
     
     def train(self, X, y, epochs, learning_rate, target_error=1e-15, callback=None, gui_instance=None):
         errors = []
+        final_epoch = 0
         for epoch in range(epochs):
             # Check if training should stop
             if gui_instance and gui_instance.stop_training_flag:
                 print(f"Training stopped by user at epoch {epoch}")
+                final_epoch = epoch
                 break
                 
             # Forward propagation
@@ -135,20 +137,27 @@ class NeuralNetwork:
             self.W2 -= learning_rate * dW2
             self.b2 -= learning_rate * db2
             
+            # Apply NOT gate restrictions if needed (enforced from GUI callback)
+            # This ensures input 2 weights remain zero for NOT gate
+            
             # Callback for GUI updates
             if callback and epoch % 100 == 0:
                 # Check callback return value for stop signal
                 continue_training = callback(epoch, error, self.W1, self.b1, self.W2, self.b2)
                 if continue_training is False:
                     print(f"Training stopped by callback at epoch {epoch}")
+                    final_epoch = epoch
                     break
             
             # Check if target error is reached
             if error < target_error:
                 print(f"Target error reached at epoch {epoch}")
+                final_epoch = epoch
                 break
+            
+            final_epoch = epoch
                 
-        return errors
+        return errors, final_epoch
     
     def predict(self, X):
         return self.forward(X)
@@ -236,3 +245,11 @@ class NeuralNetwork:
             }
         }
         return summary 
+    
+    def enforce_not_gate_restrictions(self):
+        """
+        Enforce NOT gate restrictions by setting input 2 weights to zero
+        This should be called from the GUI when NOT gate is selected
+        """
+        if hasattr(self, 'W1'):
+            self.W1[1, :] = 0  # Set all weights from input 2 to hidden layer to 0 

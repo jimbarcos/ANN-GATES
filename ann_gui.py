@@ -188,7 +188,7 @@ class ANNGui:
         self.ax_weights.axis('off')
         
         # Update training data display when gate changes
-        gate_combo.bind('<<ComboboxSelected>>', self.update_training_data_display)
+        gate_combo.bind('<<ComboboxSelected>>', self.on_gate_change)
         # Initialize training data display after creating default data
         self.root.after(100, self.update_training_data_display)
         
@@ -206,13 +206,14 @@ class ANNGui:
         
         ttk.Label(control_panel, text="Input 1:").pack(side=tk.LEFT, padx=(20,5))
         self.input1_var = tk.DoubleVar(value=0)
-        input1_entry = ttk.Entry(control_panel, textvariable=self.input1_var, width=10)
-        input1_entry.pack(side=tk.LEFT, padx=5)
+        self.input1_entry = ttk.Entry(control_panel, textvariable=self.input1_var, width=10)
+        self.input1_entry.pack(side=tk.LEFT, padx=5)
         
-        ttk.Label(control_panel, text="Input 2:").pack(side=tk.LEFT, padx=(10,5))
+        self.input2_label = ttk.Label(control_panel, text="Input 2:")
+        self.input2_label.pack(side=tk.LEFT, padx=(10,5))
         self.input2_var = tk.DoubleVar(value=0)
-        input2_entry = ttk.Entry(control_panel, textvariable=self.input2_var, width=10)
-        input2_entry.pack(side=tk.LEFT, padx=5)
+        self.input2_entry = ttk.Entry(control_panel, textvariable=self.input2_var, width=10)
+        self.input2_entry.pack(side=tk.LEFT, padx=5)
         
         ttk.Button(control_panel, text="Test", command=self.test_network).pack(side=tk.LEFT, padx=20)
         
@@ -231,8 +232,36 @@ class ANNGui:
         self.draw_network()
         
         # Bind Enter key to test
-        input1_entry.bind('<Return>', lambda e: self.test_network())
-        input2_entry.bind('<Return>', lambda e: self.test_network())
+        self.input1_entry.bind('<Return>', lambda e: self.test_network())
+        self.input2_entry.bind('<Return>', lambda e: self.test_network())
+        
+        # Apply initial gate restrictions
+        self.apply_gate_restrictions()
+    
+    def on_gate_change(self, event=None):
+        """Called when gate selection changes"""
+        self.update_training_data_display(event)
+        self.apply_gate_restrictions()
+        # Reset network when gate changes
+        self.reset_network()
+    
+    def apply_gate_restrictions(self):
+        """Apply restrictions based on selected gate"""
+        gate = self.current_gate.get()
+        
+        if gate == "NOT":
+            # Disable input 2 for NOT gate
+            self.input2_entry.config(state="disabled")
+            self.input2_label.config(foreground="gray")
+            self.input2_var.set(0)  # Set to 0 and keep it there
+            
+            # Set input 2 weights to zero in the neural network
+            if hasattr(self.nn, 'W1'):
+                self.nn.W1[1, :] = 0  # Set all weights from input 2 to hidden layer to 0
+        else:
+            # Enable input 2 for all other gates
+            self.input2_entry.config(state="normal")
+            self.input2_label.config(foreground="black")
     
     def create_default_training_data(self):
         """Create default training data for all logic gates"""
@@ -277,6 +306,10 @@ class ANNGui:
         hidden_activation = self.activation_var.get()
         output_activation = self.output_activation_var.get()
         self.nn = NeuralNetwork(hidden_activation=hidden_activation, output_activation=output_activation)
+        
+        # Apply gate restrictions after creating new network
+        self.apply_gate_restrictions()
+        
         self.status_var.set(f"Network reset with {hidden_activation}/{output_activation} activation")
         self.epoch_var.set("Epoch: 0")
         self.error_display_var.set("Error: Not started")
@@ -315,7 +348,9 @@ class ANNGui:
         self.is_training = True
         self.stop_training_flag = False  # Reset stop flag
         self.errors_history = []
-        self.target_epochs = epochs  # Store target epochs for final display
+        
+        # Apply gate restrictions before training
+        self.apply_gate_restrictions()
         
         # Update UI for training state
         self.start_btn.config(state="disabled")
@@ -339,7 +374,11 @@ class ANNGui:
                 
             self.errors_history.append(error)
             
-
+            # Enforce NOT gate restrictions during training
+            gate = self.current_gate.get()
+            if gate == "NOT":
+                # Zero out input 2 weights after each update
+                self.nn.W1[1, :] = 0
             
             # Update GUI in main thread
             if not self.stop_training_flag:
@@ -349,7 +388,9 @@ class ANNGui:
         # Progress bar animation removed
         
         try:
-            errors = self.nn.train(X, y, epochs, lr, target_error, update_callback, self)
+            errors, final_epoch = self.nn.train(X, y, epochs, lr, target_error, update_callback, self)
+            # Store the final epoch count for display
+            self.final_epoch_count = final_epoch
             if not self.stop_training_flag:
                 self.root.after(0, self._training_complete)
         except Exception as e:
@@ -459,7 +500,7 @@ class ANNGui:
         self.status_var.set("Training completed!")
         
         # Update final epoch count to show actual completion
-        actual_epochs = getattr(self, 'target_epochs', len(self.errors_history))
+        actual_epochs = getattr(self, 'final_epoch_count', len(self.errors_history) - 1)
         self.epoch_var.set(f"Epoch: {actual_epochs:,}")
         
         # Show final error with success styling
@@ -494,6 +535,10 @@ class ANNGui:
         hidden_activation = self.activation_var.get()
         output_activation = self.output_activation_var.get()
         self.nn = NeuralNetwork(hidden_activation=hidden_activation, output_activation=output_activation)
+        
+        # Apply gate restrictions after reset
+        self.apply_gate_restrictions()
+        
         self.status_var.set("Network reset - ready to train")
         self.epoch_var.set("Epoch: 0")
         self.error_display_var.set("Error: Not started")
@@ -522,25 +567,45 @@ class ANNGui:
         input1 = self.input1_var.get()
         input2 = self.input2_var.get()
         
+        # Apply NOT gate restrictions
+        gate = self.current_gate.get()
+        if gate == "NOT":
+            input2 = 0  # Force input 2 to be 0 for NOT gate
+            self.input2_var.set(0)  # Update the display
+            # Ensure input 2 weights are zero
+            if hasattr(self.nn, 'W1'):
+                self.nn.W1[1, :] = 0
+        
         # Test the network
         test_input = np.array([[input1, input2]])
         output = self.nn.predict(test_input)
         
-        self.output_var.set(f"Output: {output[0][0]:.7f}")
+        self.output_var.set(f"Output: {output[0][0]:.6f}")
         
         # Update network visualization with current values
         self.draw_network(test_input[0])
     
     def test_all_combinations(self):
         """Test all input combinations and display results"""
+        gate = self.current_gate.get()
         results = []
-        for i in [0, 1]:
-            for j in [0, 1]:
-                test_input = np.array([[i, j]])
-                output = self.nn.predict(test_input)
-                results.append(f"({i}, {j}) → {output[0][0]:.7f}")
         
-        result_text = "All combinations:\n" + "\n".join(results)
+        if gate == "NOT":
+            # For NOT gate, only test input 1 (input 2 is always 0)
+            for i in [0, 1]:
+                test_input = np.array([[i, 0]])
+                output = self.nn.predict(test_input)
+                results.append(f"({i}) → {output[0][0]:.6f}")
+            result_text = "NOT Gate - All combinations:\n" + "\n".join(results)
+        else:
+            # For other gates, test all combinations
+            for i in [0, 1]:
+                for j in [0, 1]:
+                    test_input = np.array([[i, j]])
+                    output = self.nn.predict(test_input)
+                    results.append(f"({i}, {j}) → {output[0][0]:.6f}")
+            result_text = "All combinations:\n" + "\n".join(results)
+        
         messagebox.showinfo("Test Results", result_text)
     
     def draw_network(self, test_input=None):
@@ -552,8 +617,14 @@ class ANNGui:
         self.ax_demo.axis('off')
         hidden_func = self.nn.hidden_activation if hasattr(self.nn, 'hidden_activation') else 'ReLU'
         output_func = self.nn.output_activation if hasattr(self.nn, 'output_activation') else 'Sigmoid'
-        self.ax_demo.set_title(f"Neural Network Architecture (2-3-1) | Hidden: {hidden_func} | Output: {output_func}", 
-                              fontsize=14, fontweight='bold')
+        
+        gate = self.current_gate.get()
+        if gate == "NOT":
+            self.ax_demo.set_title(f"Neural Network Architecture (1-3-1) | Gate: {gate} | Hidden: {hidden_func} | Output: {output_func}", 
+                                  fontsize=14, fontweight='bold')
+        else:
+            self.ax_demo.set_title(f"Neural Network Architecture (2-3-1) | Gate: {gate} | Hidden: {hidden_func} | Output: {output_func}", 
+                                  fontsize=14, fontweight='bold')
         
         # Node positions
         input_pos = [(2, 7), (2, 3)]  # I1, I2
@@ -567,12 +638,24 @@ class ANNGui:
         
         # Draw input nodes
         for i, (x, y) in enumerate(input_pos):
-            circle = patches.Circle((x, y), 0.4, color='lightblue', ec='black', linewidth=2)
-            self.ax_demo.add_patch(circle)
-            self.ax_demo.text(x, y, f'I{i+1}', ha='center', va='center', fontweight='bold', fontsize=12)
-            if test_input is not None:
-                self.ax_demo.text(x-1, y, f'{test_input[i]:.1f}', ha='center', va='center', 
-                                color='red', fontweight='bold', fontsize=14)
+            if gate == "NOT" and i == 1:
+                # Draw input 2 as disabled for NOT gate
+                circle = patches.Circle((x, y), 0.4, color='lightgray', ec='gray', linewidth=2, alpha=0.5)
+                self.ax_demo.add_patch(circle)
+                self.ax_demo.text(x, y, f'I{i+1}', ha='center', va='center', fontweight='bold', fontsize=12, color='gray')
+                self.ax_demo.text(x-1, y, 'DISABLED', ha='center', va='center', 
+                                color='red', fontweight='bold', fontsize=10, rotation=45)
+                if test_input is not None:
+                    self.ax_demo.text(x-1, y-0.5, f'{test_input[i]:.1f}', ha='center', va='center', 
+                                    color='gray', fontweight='bold', fontsize=14)
+            else:
+                # Draw normal input node
+                circle = patches.Circle((x, y), 0.4, color='lightblue', ec='black', linewidth=2)
+                self.ax_demo.add_patch(circle)
+                self.ax_demo.text(x, y, f'I{i+1}', ha='center', va='center', fontweight='bold', fontsize=12)
+                if test_input is not None:
+                    self.ax_demo.text(x-1, y, f'{test_input[i]:.1f}', ha='center', va='center', 
+                                    color='red', fontweight='bold', fontsize=14)
         
         # Draw hidden nodes
         hidden_func = self.nn.hidden_activation if hasattr(self.nn, 'hidden_activation') else 'ReLU'
@@ -624,12 +707,23 @@ class ANNGui:
         # Input to hidden connections
         for i, (x1, y1) in enumerate(input_pos):
             for j, (x2, y2) in enumerate(hidden_pos):
-                self.ax_demo.plot([x1+0.4, x2-0.4], [y1, y2], 'k-', alpha=0.6, linewidth=1.5)
-                # Show weight
-                mid_x, mid_y = (x1+x2)/2, (y1+y2)/2
                 weight = self.nn.W1[i][j]
-                self.ax_demo.text(mid_x, mid_y, f'{weight:.2f}', ha='center', va='center', 
-                                fontsize=9, bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.9))
+                
+                if gate == "NOT" and i == 1:
+                    # Draw disabled connection for input 2 in NOT gate
+                    self.ax_demo.plot([x1+0.4, x2-0.4], [y1, y2], 'gray', alpha=0.3, linewidth=1, linestyle='--')
+                    # Show disabled weight
+                    mid_x, mid_y = (x1+x2)/2, (y1+y2)/2
+                    self.ax_demo.text(mid_x, mid_y, '0.00', ha='center', va='center', 
+                                    fontsize=9, color='gray', 
+                                    bbox=dict(boxstyle="round,pad=0.2", facecolor="lightgray", alpha=0.7))
+                else:
+                    # Draw normal connection
+                    self.ax_demo.plot([x1+0.4, x2-0.4], [y1, y2], 'k-', alpha=0.6, linewidth=1.5)
+                    # Show weight
+                    mid_x, mid_y = (x1+x2)/2, (y1+y2)/2
+                    self.ax_demo.text(mid_x, mid_y, f'{weight:.2f}', ha='center', va='center', 
+                                    fontsize=9, bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.9))
         
         # Hidden to output connections
         for i, (x1, y1) in enumerate(hidden_pos):
@@ -642,11 +736,19 @@ class ANNGui:
                             fontsize=9, bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.9))
         
         # Add legend
-        legend_elements = [
-            patches.Circle((0, 0), 0.1, color='lightblue', label='Input Layer'),
-            patches.Circle((0, 0), 0.1, color='lightgreen', label='Hidden Layer'),
-            patches.Circle((0, 0), 0.1, color='lightcoral', label='Output Layer')
-        ]
+        if gate == "NOT":
+            legend_elements = [
+                patches.Circle((0, 0), 0.1, color='lightblue', label='Active Input'),
+                patches.Circle((0, 0), 0.1, color='lightgray', label='Disabled Input'),
+                patches.Circle((0, 0), 0.1, color='lightgreen', label='Hidden Layer'),
+                patches.Circle((0, 0), 0.1, color='lightcoral', label='Output Layer')
+            ]
+        else:
+            legend_elements = [
+                patches.Circle((0, 0), 0.1, color='lightblue', label='Input Layer'),
+                patches.Circle((0, 0), 0.1, color='lightgreen', label='Hidden Layer'),
+                patches.Circle((0, 0), 0.1, color='lightcoral', label='Output Layer')
+            ]
         self.ax_demo.legend(handles=legend_elements, loc='upper right' , bbox_to_anchor=(1.2, 0.98), fontsize=10)
 
         self.canvas_demo.draw()
